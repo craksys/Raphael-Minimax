@@ -522,37 +522,20 @@ int v1_8::negamax(
                     extension++;
             }
         }
-        // late move reduction with zero window for certain quiet moves
         bool fullwindow = true;
         int eval;
         if (extension == 0 && depth >= 3 && movei >= params.REDUCTION_FROM && !istactical) {
-            eval = -negamax(board, depth - 2, ply + 1, ext, -alpha - 1, -alpha, halt);
+            eval = -negamax(board, depth - 2, ply + 1, ext, -INT_MAX, INT_MAX, halt);
             fullwindow = eval > alpha;
         }
         if (fullwindow)
-            eval = -negamax(
-                board, depth - 1 + extension, ply + 1, ext - extension, -beta, -alpha, halt
-            );
+            eval = -negamax(board, depth - 1 + extension, ply + 1, ext - extension, -INT_MAX, INT_MAX, halt);
         extension = 0;
         movei++;
         board.unmakeMove(move);
 
-        // timeout
         if (halt) return 0;
 
-        // prune
-        if (eval >= beta) {
-            // store killer move (ignore captures)
-            if (!board.isCapture(move)) {
-                killers.put(move, ply);
-                history.update(move, depth, whiteturn);
-            }
-            // update transposition
-            tt.set({ttkey, depth, tt.LOWER, move, alpha}, ply);
-            return beta;
-        }
-
-        // update eval
         if (eval > alpha) {
             alpha = eval;
             bestmove = move;
@@ -560,9 +543,8 @@ int v1_8::negamax(
         }
     }
 
-    // update transposition
-    auto flag = (alpha <= alphaorig) ? tt.UPPER : tt.EXACT;
-    tt.set({ttkey, depth, flag, bestmove, alpha}, ply);
+    // store as exact minimax result
+    tt.set({ttkey, depth, tt.EXACT, bestmove, alpha}, ply);
     return alpha;
 }
 
