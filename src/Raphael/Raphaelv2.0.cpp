@@ -76,7 +76,7 @@ chess::Move v2_0::get_move(
         if (eval >= params.MIN_SKIP_EVAL && consecutives >= params.PV_STABLE_COUNT
             && !searchopt.infinite)
             halt = true;
-        int itereval = negamax(board, depth, 0, params.MAX_EXTENSIONS, alpha, beta, halt);
+        int itereval = negamax(board, depth, 0, params.MAX_EXTENSIONS, halt);
 
         // not timeout
         if (!halt) {
@@ -188,7 +188,7 @@ void v2_0::ponder(chess::Board board, volatile bool& halt) {
 
     // begin iterative deepening for our best response
     while (!halt && ponderdepth <= MAX_DEPTH) {
-        int itereval = negamax(board, ponderdepth, 0, params.MAX_EXTENSIONS, alpha, beta, halt);
+        int itereval = negamax(board, ponderdepth, 0, params.MAX_EXTENSIONS, halt);
 
         if (!halt) {
             pondereval = itereval;
@@ -298,139 +298,72 @@ int v2_0::negamax(
     const int depth,
     const int ply,
     const int ext,
-    int /*alpha*/,  // no longer used
-    int /*beta*/,   // no longer used
     volatile bool& halt
 ) {
-    // timeout
     if (is_time_over(halt)) return 0;
     nodes++;
 
-    if (ply) {
-        // prevent draw in winning positions
-        // technically this ignores checkmate on the 50th move
-        if (board.isRepetition(1) || board.isHalfMoveDraw()) return 0;
+    // terminal/noisy cutoff
+    if (depth <= 0 || ply == MAX_DEPTH - 1)
+        return quiescence(board, ply, halt);
 
-        // mate distance pruning
-        // alpha = max(alpha, -MATE_EVAL + ply);
-        // beta = min(beta, MATE_EVAL - ply);
-        // if (alpha >= beta) return alpha;
-    }
+    // repetition/draw
+    if (ply && (board.isRepetition(1) || board.isHalfMoveDraw()))
+        return 0;
 
-    // transposition lookup (only exact entries)
-    auto ttkey = board.hash();
-    auto entry = tt.get(ttkey, ply);
-    if (tt.valid(entry, ttkey, depth) && entry.flag == tt.EXACT) {
-        if (!ply) itermove = entry.move;
-        return entry.eval;
-    }
-
-    // terminal analysis
-    if (board.isInsufficientMaterial()) return 0;
+    // generate
     chess::Movelist movelist;
     chess::movegen::legalmoves<chess::MoveGenType::ALL>(movelist, board);
-    if (movelist.empty()) {
-        if (board.inCheck()) return -MATE_EVAL + ply;  // reward faster checkmate
-        return 0;
-    }
+    if (movelist.empty())
+        return board.inCheck() ? -MATE_EVAL + ply : 0;
 
-    // terminal depth
-    if (depth <= 0 || ply == MAX_DEPTH - 1)
-        return quiescence(board, ply, /*alpha=*/-INT_MAX, /*beta=*/INT_MAX, halt);
-
-    // one reply extension
-    int extension = 0;
-    if (movelist.size() > 1)
-        order_moves(movelist, board, ply);
-    else if (ext > 0)
-        extension++;
-
-    // PURE MINIMAX: track bestEval only
+    order_moves(movelist, board, ply);
     int bestEval = -INT_MAX;
     chess::Move bestmove = movelist[0];
     if (!ply) itermove = bestmove;
-    int movei = 0;
 
-    for (const auto& move : movelist) {
-        bool istactical = board.isCapture(move) || move.typeOf() == chess::Move::PROMOTION;
-        net.make_move(ply + 1, move, board);
-        board.makeMove(move);
-        // check and passed pawn extension
-        if (ext > extension) {
-            if (board.inCheck())
-                extension++;
-            else {
-                auto sqrank = chess::utils::squareRank(move.to());
-                auto piece = board.at(move.to());
-                if ((sqrank == chess::Rank::RANK_2 && piece == chess::Piece::BLACKPAWN)
-                    || (sqrank == chess::Rank::RANK_7 && piece == chess::Piece::WHITEPAWN))
-                    extension++;
-            }
-        }
-        // late move reduction with zero window for certain quiet moves
-        bool fullwindow = true;
-        int eval;
-        if (extension == 0 && depth >= 3 && movei >= params.REDUCTION_FROM && !istactical) {
-            eval = -negamax(board, depth - 2, ply + 1, ext, 0, 0, halt);
-            fullwindow = eval > 0;
-        }
-        if (fullwindow)
-            eval = -negamax(board, depth - 1 + extension, ply + 1, ext - extension, 0, 0, halt);
-        extension = 0;
-        movei++;
-        board.unmakeMove(move);
-
-        // timeout
+    for (const auto& mv : movelist) {
+        net.make_move(ply+1, mv, board);
+        board.makeMove(mv);
+        int eval = -negamax(board, depth-1, ply+1, ext, halt);
+        board.unmakeMove(mv);
         if (halt) return 0;
-
-        // update bestEval (no prune)
         if (eval > bestEval) {
             bestEval = eval;
-            bestmove = move;
-            if (!ply) itermove = move;
+            if (!ply) itermove = mv;
         }
     }
 
-    // always store exact
-    tt.set({ ttkey, depth, tt.EXACT, bestmove, bestEval }, ply);
+    // still cache exact to TT if you like
+    tt.set({ board.hash(), depth, tt.EXACT, itermove, bestEval }, ply);
     return bestEval;
 }
 
-int v2_0::quiescence(chess::Board& board, const int ply, int alpha, int beta, volatile bool& halt) {
-    // timeout
+int v2_0::quiescence(chess::Board& board, const int ply, volatile bool& halt) {
     if (is_time_over(halt)) return 0;
     nodes++;
 
-    // prune with standing pat
-    int eval = net.evaluate(ply, whiteturn) * (100 - board.halfMoveClock()) / 100;
-    if (eval >= beta) return beta;
-    alpha = max(alpha, eval);
+    // standing pat
+    int bestEval = net.evaluate(ply, whiteturn)
+                   * (100 - board.halfMoveClock()) / 100;
 
-    // terminal depth
-    if (ply == MAX_DEPTH - 1) return alpha;
+    if (ply == MAX_DEPTH - 1)
+        return bestEval;
 
-    // search
+    // only captures
     chess::Movelist movelist;
     chess::movegen::legalmoves<chess::MoveGenType::CAPTURE>(movelist, board);
-    order_moves(movelist, board, 0);
+    order_moves(movelist, board, ply);
 
-    for (const auto& move : movelist) {
-        net.make_move(ply + 1, move, board);
-        board.makeMove(move);
-        // SEE pruning for losing captures
-        if (move.score() < params.GOOD_CAPTURE_WEIGHT && !board.inCheck()) {
-            board.unmakeMove(move);
-            continue;
-        }
-        eval = -quiescence(board, ply + 1, -beta, -alpha, halt);
-        board.unmakeMove(move);
-
-        // prune
-        if (eval >= beta) return beta;
-        alpha = max(alpha, eval);
+    for (const auto& mv : movelist) {
+        net.make_move(ply+1, mv, board);
+        board.makeMove(mv);
+        int eval = -quiescence(board, ply+1, halt);
+        board.unmakeMove(mv);
+        if (halt) return 0;
+        if (eval > bestEval) bestEval = eval;
     }
-
-    return alpha;
+    return bestEval;
 }
 
 

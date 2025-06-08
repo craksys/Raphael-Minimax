@@ -185,8 +185,6 @@ protected:
         const int depth,
         const int ply,
         const int ext,
-        int alpha,
-        int beta,
         volatile bool& halt
     );
 
@@ -199,7 +197,7 @@ protected:
      * \param halt bool reference which will turn false to indicate search should stop
      * \returns eval of current board
      */
-    int quiescence(chess::Board& board, const int ply, int alpha, int beta, volatile bool& halt);
+    int quiescence(chess::Board& board, const int ply, volatile bool& halt);
 
 
     /** Sorts the movelist from best to worst
