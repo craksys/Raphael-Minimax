@@ -125,17 +125,7 @@ protected:
      * \param halt bool reference which will turn false to indicate search should stop
      * \returns eval of current board
      */
-    int negamax(chess::Board& board, int depth, int ply, int alpha, int beta, volatile bool& halt);
-
-    /** Evaluates the board after all noisy moves are played out
-     *
-     * \param board current board
-     * \param alpha lower bound eval of current position
-     * \param beta upper bound eval of current position
-     * \param halt bool reference which will turn false to indicate search should stop
-     * \returns eval of current board
-     */
-    int quiescence(chess::Board& board, int alpha, int beta, volatile bool& halt) const;
+    int minimax(chess::Board& board, int depth, volatile bool& halt);
 
 
     /** Populates the movelist with moves, ordered from best to worst

@@ -201,28 +201,11 @@ chess::Move v1_0::get_move(
 
     // begin iterative deepening
     while (!halt) {
-        int itereval = negamax(board, depth, 0, -INT_MAX, INT_MAX, halt);
+        int itereval = minimax(board, depth, halt);
 
-        // not timeout
         if (!halt) {
             toPlay = itermove;
             eval = itereval;
-        }
-
-        // checkmate, no need to continue
-        if (tt.isMate(eval)) {
-#ifndef MUTEEVAL
-            if (!UCI) {
-                // get absolute evaluation (i.e, set to white's perspective)
-                lock_guard<mutex> lock(cout_mutex);
-                if (whiteturn == (eval > 0))
-                    cout << "Eval: #\n" << flush;
-                else
-                    cout << "Eval: -#\n" << flush;
-            }
-#endif
-            halt = true;
-            return toPlay;
         }
         depth++;
     }
@@ -267,111 +250,30 @@ void v1_0::manage_time(volatile bool& halt, const int duration) {
     }
 }
 
-
-int v1_0::negamax(
-    chess::Board& board, int depth, int ply, int alpha, int beta, volatile bool& halt
-) {
-    // timeout
+/** Pure minimax search */
+int v1_0::minimax(chess::Board& board, int depth, volatile bool& halt) {
     if (halt) return 0;
-
-    // prevent draw in winning positions
-    if (ply)
-        if (board.isRepetition(1) || board.isHalfMoveDraw()) return 0;
-
-    // transposition lookup
-    int alphaorig = alpha;
-    auto ttkey = board.zobrist();
-    auto entry = tt.get(ttkey, ply);
-    if (tt.valid(entry, ttkey, depth)) {
-        if (entry.flag == tt.EXACT) {
-            if (!ply) itermove = entry.move;
-            return entry.eval;
-        } else if (entry.flag == tt.LOWER)
-            alpha = max(alpha, entry.eval);
-        else
-            beta = min(beta, entry.eval);
-
-        // prune
-        if (alpha >= beta) {
-            if (!ply) itermove = entry.move;
-            return entry.eval;
-        }
+    if (depth == 0) {
+        return evaluate(board);
     }
-
-    // checkmate/draw
-    auto result = board.isGameOver().second;
-    if (result == chess::GameResult::DRAW)
-        return 0;
-    else if (result == chess::GameResult::LOSE)
-        return -MATE_EVAL + ply;  // reward faster checkmate
-
-    // terminal depth
-    if (depth == 0) return quiescence(board, alpha, beta, halt);
-
-    // search
     chess::Movelist movelist;
     order_moves(movelist, board);
-    chess::Move bestmove = movelist[0];  // best move in this position
-
-    for (auto& move : movelist) {
+    int bestEval = -INT_MAX;
+    for (auto move : movelist) {
         board.makeMove(move);
-        int eval = -negamax(board, depth - 1, ply + 1, -beta, -alpha, halt);
+        int eval = -minimax(board, depth - 1, halt);
         board.unmakeMove(move);
-
-        // timeout
         if (halt) return 0;
-
-        // update eval
-        if (eval > alpha) {
-            alpha = eval;
-            bestmove = move;
-            if (!ply) itermove = move;
+        if (eval > bestEval) {
+            bestEval = eval;
+            // on root iteration, record best move
+            if (depth == /* original root depth */ depth) {
+                itermove = move;
+            }
         }
-
-        // prune
-        if (alpha >= beta) break;
     }
-
-    // store transposition
-    TranspositionTable::Flag flag;
-    if (alpha <= alphaorig)
-        flag = tt.UPPER;
-    else if (alpha >= beta)
-        flag = tt.LOWER;
-    else
-        flag = tt.EXACT;
-    tt.set({ttkey, depth, flag, bestmove, alpha}, ply);
-
-    return alpha;
+    return bestEval;
 }
-
-int v1_0::quiescence(chess::Board& board, int alpha, int beta, volatile bool& halt) const {
-    int eval = evaluate(board);
-
-    // timeout
-    if (halt) return eval;
-
-    // prune
-    alpha = max(alpha, eval);
-    if (alpha >= beta) return alpha;
-
-    // search
-    chess::Movelist movelist;
-    order_cap_moves(movelist, board);
-
-    for (auto& move : movelist) {
-        board.makeMove(move);
-        eval = -quiescence(board, -beta, -alpha, halt);
-        board.unmakeMove(move);
-
-        // prune
-        alpha = max(alpha, eval);
-        if (alpha >= beta) break;
-    }
-
-    return alpha;
-}
-
 
 void v1_0::order_moves(chess::Movelist& movelist, const chess::Board& board) const {
     chess::movegen::legalmoves(movelist, board);
