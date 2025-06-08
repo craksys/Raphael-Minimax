@@ -298,8 +298,8 @@ int v2_0::negamax(
     const int depth,
     const int ply,
     const int ext,
-    int alpha,
-    int beta,
+    int /*alpha*/,                 // no longer used
+    int /*beta*/,                  // no longer used
     volatile bool& halt
 ) {
     // timeout
@@ -312,9 +312,9 @@ int v2_0::negamax(
         if (board.isRepetition(1) || board.isHalfMoveDraw()) return 0;
 
         // mate distance pruning
-        alpha = max(alpha, -MATE_EVAL + ply);
-        beta = min(beta, MATE_EVAL - ply);
-        if (alpha >= beta) return alpha;
+        // alpha = max(alpha, -MATE_EVAL + ply);
+        // beta = min(beta, MATE_EVAL - ply);
+        // if (alpha >= beta) return alpha;
     }
 
     // transposition lookup
@@ -347,7 +347,8 @@ int v2_0::negamax(
     }
 
     // terminal depth
-    if (depth <= 0 || ply == MAX_DEPTH - 1) return quiescence(board, ply, alpha, beta, halt);
+    if (depth <= 0 || ply == MAX_DEPTH - 1)
+        return quiescence(board, ply, /*alpha=*/-INT_MAX, /*beta=*/INT_MAX, halt);
 
     // one reply extension
     int extension = 0;
@@ -356,9 +357,10 @@ int v2_0::negamax(
     else if (ext > 0)
         extension++;
 
-    // search
-    chess::Move bestmove = movelist[0];  // best move in this position
-    if (!ply) itermove = bestmove;       // set itermove in case time runs out here
+    // PURE MINIMAX: track bestEval only
+    int bestEval = -INT_MAX;
+    chess::Move bestmove = movelist[0];
+    if (!ply) itermove = bestmove;
     int movei = 0;
 
     for (const auto& move : movelist) {
@@ -395,30 +397,17 @@ int v2_0::negamax(
         // timeout
         if (halt) return 0;
 
-        // prune
-        if (eval >= beta) {
-            // store killer move (ignore captures)
-            if (!board.isCapture(move)) {
-                killers.put(move, ply);
-                history.update(move, depth, whiteturn);
-            }
-            // update transposition
-            tt.set({ttkey, depth, tt.LOWER, move, alpha}, ply);
-            return beta;
-        }
-
-        // update eval
-        if (eval > alpha) {
-            alpha = eval;
+        // update bestEval (no prune)
+        if (eval > bestEval) {
+            bestEval = eval;
             bestmove = move;
             if (!ply) itermove = move;
         }
     }
 
-    // update transposition
-    auto flag = (alpha <= alphaorig) ? tt.UPPER : tt.EXACT;
-    tt.set({ttkey, depth, flag, bestmove, alpha}, ply);
-    return alpha;
+    // always store exact
+    tt.set({ ttkey, depth, tt.EXACT, bestmove, bestEval }, ply);
+    return bestEval;
 }
 
 int v2_0::quiescence(chess::Board& board, const int ply, int alpha, int beta, volatile bool& halt) {
