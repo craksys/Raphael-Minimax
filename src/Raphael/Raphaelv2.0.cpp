@@ -298,8 +298,8 @@ int v2_0::negamax(
     const int depth,
     const int ply,
     const int ext,
-    int /*alpha*/,                 // no longer used
-    int /*beta*/,                  // no longer used
+    int /*alpha*/,  // no longer used
+    int /*beta*/,   // no longer used
     volatile bool& halt
 ) {
     // timeout
@@ -317,24 +317,12 @@ int v2_0::negamax(
         // if (alpha >= beta) return alpha;
     }
 
-    // transposition lookup
-    int alphaorig = alpha;
+    // transposition lookup (only exact entries)
     auto ttkey = board.hash();
     auto entry = tt.get(ttkey, ply);
-    if (tt.valid(entry, ttkey, depth)) {
-        if (entry.flag == tt.EXACT) {
-            if (!ply) itermove = entry.move;
-            return entry.eval;
-        } else if (entry.flag == tt.LOWER)
-            alpha = max(alpha, entry.eval);
-        else
-            beta = min(beta, entry.eval);
-
-        // prune
-        if (alpha >= beta) {
-            if (!ply) itermove = entry.move;
-            return entry.eval;
-        }
+    if (tt.valid(entry, ttkey, depth) && entry.flag == tt.EXACT) {
+        if (!ply) itermove = entry.move;
+        return entry.eval;
     }
 
     // terminal analysis
@@ -383,13 +371,11 @@ int v2_0::negamax(
         bool fullwindow = true;
         int eval;
         if (extension == 0 && depth >= 3 && movei >= params.REDUCTION_FROM && !istactical) {
-            eval = -negamax(board, depth - 2, ply + 1, ext, -alpha - 1, -alpha, halt);
-            fullwindow = eval > alpha;
+            eval = -negamax(board, depth - 2, ply + 1, ext, 0, 0, halt);
+            fullwindow = eval > 0;
         }
         if (fullwindow)
-            eval = -negamax(
-                board, depth - 1 + extension, ply + 1, ext - extension, -beta, -alpha, halt
-            );
+            eval = -negamax(board, depth - 1 + extension, ply + 1, ext - extension, 0, 0, halt);
         extension = 0;
         movei++;
         board.unmakeMove(move);
